@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --platform=node --bundle --outfile=dist/server.js --external:vite --external:express --external:ws",
+    "build": "vite build",
+    "build:server": "vite build && esbuild server.ts --platform=node --bundle --format=esm --outfile=dist/server.js --external:vite --external:express --external:ws",
     "start": "node dist/server.js",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",

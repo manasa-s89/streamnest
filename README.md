@@ -52,8 +52,24 @@ StreamNest is a modern, premium OTT streaming platform built with React, Vite, E
 5. **Build for production:**
    ```bash
    npm run build
-   npm start
    ```
+
+## 🌐 Deploy to Vercel
+
+### 1-Click Deployment
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmanasa-s89%2Fstreamnest)
+
+### Manual Setup on Vercel Dashboard
+
+1. Go to [vercel.com/new](https://vercel.com/new).
+2. Import the **`manasa-s89/streamnest`** repository from GitHub.
+3. Configure the Project Settings (automatically detected via `vercel.json`):
+   - **Framework Preset**: `Vite`
+   - **Root Directory**: `./`
+   - **Build Command**: `vite build`
+   - **Output Directory**: `dist`
+4. Click **Deploy**. Vercel will build and assign an instant production URL with automatic SSL and CDN caching.
 
 ## 📄 License
 
