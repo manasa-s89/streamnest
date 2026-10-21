@@ -1,0 +1,6 @@
+{
+  "name": "StreamNest - Premium OTT Streaming",
+  "description": "StreamNest is a premium OTT streaming platform featuring trending movies, original series, personalized watchlists, subscription plans, and unified customer telemetry integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
