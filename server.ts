@@ -2,7 +2,9 @@ import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { STREAMNEST_SUBSCRIBERS, writeChurnCsvFile, scoreSubscriberLive } from './scripts/churnCrmConnector.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -285,10 +287,146 @@ wss.on('connection', (ws: WebSocket) => {
 async function startServer() {
   const isDev = process.env.NODE_ENV !== 'production';
 
+  app.use(express.json());
+
+  // CRM Batch CSV Download Endpoint
+  app.get('/api/crm/csv', (_req, res) => {
+    const csvPath = path.resolve(process.cwd(), 'churn_subscribers_batch.csv');
+    if (!fs.existsSync(csvPath)) {
+      writeChurnCsvFile(csvPath);
+    }
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="churn_subscribers_batch.csv"');
+    res.sendFile(csvPath);
+  });
+
+  // CRM Subscribers JSON Endpoint
+  app.get('/api/crm/subscribers', (_req, res) => {
+    res.json({
+      status: 'success',
+      total: STREAMNEST_SUBSCRIBERS.length,
+      subscribers: STREAMNEST_SUBSCRIBERS,
+    });
+  });
+
+  // CRM Proxy Ping / Health Endpoint
+  app.all('/api/crm/ping', async (req, res) => {
+    const targetUrl =
+      (req.query.url as string) ||
+      (req.body && req.body.url) ||
+      (req.headers['x-crm-url'] as string) ||
+      'https://behaviour-pridection-intervention.vercel.app';
+    const cleanUrl = targetUrl.trim().replace(/\/$/, '');
+    const startTime = Date.now();
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      // Fast check using HEAD on root
+      let upstreamStatus = 200;
+      let ok = true;
+      try {
+        const headRes = await fetch(`${cleanUrl}/`, {
+          method: 'HEAD',
+          signal: controller.signal,
+        });
+        upstreamStatus = headRes.status;
+        ok = headRes.ok || headRes.status === 200 || headRes.status === 405 || headRes.status === 404 || headRes.status === 401;
+      } catch {
+        // Fallback to GET if HEAD is refused or unsupported
+        const getRes = await fetch(`${cleanUrl}/`, {
+          method: 'GET',
+          signal: controller.signal,
+        });
+        upstreamStatus = getRes.status;
+        ok = getRes.ok || getRes.status === 200 || getRes.status === 404 || getRes.status === 401;
+      }
+
+      clearTimeout(timeoutId);
+      const latencyMs = Math.max(1, Date.now() - startTime);
+
+      res.json({
+        reachable: ok,
+        status: upstreamStatus,
+        statusText: ok ? `Connected (HTTP ${upstreamStatus})` : `Upstream HTTP ${upstreamStatus}`,
+        latencyMs,
+        targetUrl: cleanUrl,
+      });
+    } catch (err: any) {
+      const latencyMs = Math.max(1, Date.now() - startTime);
+      res.json({
+        reachable: false,
+        status: 504,
+        statusText: 'Unreachable / Connection Refused',
+        errorDetails: err.name === 'AbortError' ? 'Timed out after 8000ms' : (err.message || 'Connection failed'),
+        latencyMs,
+        targetUrl: cleanUrl,
+      });
+    }
+  });
+
+  // CRM Proxy Predict Endpoint
+  app.post('/api/crm/predict', async (req, res) => {
+    try {
+      const targetUrl =
+        (req.query.targetUrl as string) ||
+        (req.query.url as string) ||
+        (req.body && req.body.targetUrl) ||
+        (req.headers['x-crm-url'] as string) ||
+        (req.headers['x-crm-target-url'] as string) ||
+        undefined;
+
+      const bodyCopy = { ...(req.body || {}) };
+      delete bodyCopy.targetUrl;
+
+      const result = await scoreSubscriberLive(bodyCopy, targetUrl);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Prediction failed' });
+    }
+  });
+
+  // CRM Proxy Telemetry Ingestion Endpoint
+  app.post(['/api/crm/telemetry', '/api/telemetry/events'], async (req, res) => {
+    try {
+      const targetUrl =
+        (req.query.url as string) ||
+        (req.headers['x-crm-url'] as string) ||
+        'https://behaviour-pridection-intervention.vercel.app';
+
+      // Forward to remote CRM if online (fire-and-forget background ping)
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
+        await fetch(`${targetUrl.replace(/\/$/, '')}/api/telemetry/events`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(req.body),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+      } catch {
+        // Fallback: server acknowledged event even if remote CRM is unavailable
+      }
+
+      res.json({
+        status: 'success',
+        message: 'Telemetry event registered',
+        event_id: req.body?.event_id || req.body?.eventId,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Telemetry proxy failed' });
+    }
+  });
+
   if (isDev) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: { server },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -300,6 +438,17 @@ async function startServer() {
   }
 
   const PORT = Number(process.env.PORT) || 3000;
+
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\n❌ Error: Port ${PORT} is already in use by another running process.`);
+      console.error(`   To kill the process on port ${PORT}, run in terminal:`);
+      console.error(`   powershell "Stop-Process -Id (Get-NetTCPConnection -LocalPort ${PORT}).OwningProcess -Force"\n`);
+    } else {
+      console.error('Server error:', err);
+    }
+  });
+
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`StreamNest server running on port ${PORT}`);
   });

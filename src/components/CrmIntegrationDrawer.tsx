@@ -9,9 +9,25 @@ import {
   Trash2,
   ChevronDown,
   ChevronUp,
+  Sparkles,
+  Download,
+  ExternalLink,
+  FileSpreadsheet,
+  Activity,
+  TrendingUp,
 } from 'lucide-react';
 import { TelemetryEvent } from '../types/user.ts';
 import { crmTelemetry, DEFAULT_CRM_ENDPOINT } from '../services/crmTelemetry.ts';
+import {
+  calculateSubscriberMetrics,
+  predictChurnDirect,
+  generateBatchCsvText,
+  triggerCsvDownload,
+  CHURN_CRM_BASE_URL,
+  STREAMNEST_SUBSCRIBERS,
+  ChurnPredictionResult,
+} from '../services/churnCrmConnector.ts';
+import { INITIAL_CUSTOMER, INITIAL_HISTORY, INITIAL_WATCH_PROGRESS } from '../data/mockUser.ts';
 
 interface CrmIntegrationDrawerProps {
   onClose: () => void;
@@ -39,7 +55,11 @@ export const CrmIntegrationDrawer: React.FC<CrmIntegrationDrawerProps> = ({
   const [isRetrying, setIsRetrying] = useState<boolean>(false);
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'stream' | 'contract' | 'flask_code'>('stream');
+  const [activeTab, setActiveTab] = useState<'churniq' | 'stream' | 'contract' | 'flask_code'>('churniq');
+  const [isScoring, setIsScoring] = useState<boolean>(false);
+  const [predictionResult, setPredictionResult] = useState<ChurnPredictionResult | null>(null);
+  const [scoringError, setScoringError] = useState<string | null>(null);
+  const [csvDownloaded, setCsvDownloaded] = useState<boolean>(false);
 
   useEffect(() => {
     // Initial fetch of recorded events
@@ -87,6 +107,33 @@ export const CrmIntegrationDrawer: React.FC<CrmIntegrationDrawerProps> = ({
     navigator.clipboard.writeText(JSON.stringify(events, null, 2));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const liveMetrics = calculateSubscriberMetrics(
+    INITIAL_CUSTOMER,
+    INITIAL_HISTORY,
+    INITIAL_WATCH_PROGRESS,
+    events
+  );
+
+  const handleScoreLive = async () => {
+    setIsScoring(true);
+    setScoringError(null);
+    try {
+      const res = await predictChurnDirect(liveMetrics, crmUrl);
+      setPredictionResult(res);
+    } catch (err: any) {
+      setScoringError(err.message || 'Failed to score churn prediction');
+    } finally {
+      setIsScoring(false);
+    }
+  };
+
+  const handleDownloadBatchCsv = () => {
+    const csv = generateBatchCsvText(STREAMNEST_SUBSCRIBERS);
+    triggerCsvDownload(csv, 'churn_subscribers_batch.csv');
+    setCsvDownloaded(true);
+    setTimeout(() => setCsvDownloaded(false), 3000);
   };
 
   const pythonFlaskSnippet = `# StreamNest CRM Telemetry Receiver - Flask Backend
@@ -167,7 +214,7 @@ if __name__ == '__main__':
                   connectionStatus.reachable ? (
                     <span className="inline-flex items-center gap-1 text-emerald-700 font-mono font-semibold">
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Online ({connectionStatus.latencyMs}ms)</span>
+                      <span>Connected ({connectionStatus.latencyMs}ms)</span>
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 text-amber-700 font-mono font-semibold">
@@ -186,7 +233,7 @@ if __name__ == '__main__':
                 type="text"
                 value={crmUrl}
                 onChange={e => setCrmUrl(e.target.value)}
-                placeholder="http://127.0.0.1:8000"
+                placeholder="https://behaviour-pridection-intervention.vercel.app"
                 className="flex-1 px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-900 focus:outline-none focus:border-emerald-500 shadow-xs"
               />
               <button
@@ -219,7 +266,7 @@ if __name__ == '__main__':
                 <p className="font-semibold">{connectionStatus.statusText}</p>
                 {connectionStatus.errorDetails && (
                   <p className="text-[11px] text-slate-600 mt-1">
-                    {connectionStatus.errorDetails}. Events are being safely persisted to the local database buffer and will flush when your Flask backend starts!
+                    {connectionStatus.errorDetails}.
                   </p>
                 )}
               </div>
@@ -229,6 +276,17 @@ if __name__ == '__main__':
           {/* Tab Navigation */}
           <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200 text-xs font-semibold">
             <button
+              onClick={() => setActiveTab('churniq')}
+              className={`flex-1 py-1.5 rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                activeTab === 'churniq'
+                  ? 'bg-purple-600 text-white font-bold shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+              <span>ChurnIQ ML & CSV</span>
+            </button>
+            <button
               onClick={() => setActiveTab('stream')}
               className={`flex-1 py-1.5 rounded-lg transition-all cursor-pointer ${
                 activeTab === 'stream'
@@ -236,7 +294,7 @@ if __name__ == '__main__':
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Live Telemetry Stream ({events.length})
+              Telemetry ({events.length})
             </button>
             <button
               onClick={() => setActiveTab('contract')}
@@ -246,7 +304,7 @@ if __name__ == '__main__':
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              API Spec & Integration
+              API Spec
             </button>
             <button
               onClick={() => setActiveTab('flask_code')}
@@ -256,9 +314,178 @@ if __name__ == '__main__':
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Python / Flask Code
+              Python / Flask
             </button>
           </div>
+
+          {/* TAB 0: ChurnIQ ML & CSV Scoring Bridge */}
+          {activeTab === 'churniq' && (
+            <div className="space-y-4 text-xs">
+              {/* Subscriber Live Telemetry Metrics Card */}
+              <div className="p-4 rounded-xl bg-gradient-to-br from-slate-900 to-indigo-950 text-white border border-slate-800 shadow-md space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-purple-400" />
+                    <span className="font-bold text-sm tracking-wide text-white">
+                      Live Streaming Metrics ({liveMetrics.customer_id})
+                    </span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/30 text-purple-200 border border-purple-400/30">
+                    {liveMetrics.subscription_plan} Plan (${liveMetrics.monthly_price}/mo)
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-slate-300">
+                  <div className="p-2.5 rounded-lg bg-white/5 border border-white/10">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Watch Hours (30d)</span>
+                    <span className="text-base font-extrabold text-white font-mono">{liveMetrics.watch_hours_last_30_days}h</span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-white/5 border border-white/10">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Inactivity</span>
+                    <span className="text-base font-extrabold text-amber-300 font-mono">{liveMetrics.days_since_last_watch}d ago</span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-white/5 border border-white/10">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Account Tenure</span>
+                    <span className="text-base font-extrabold text-emerald-300 font-mono">{liveMetrics.tenure_months} mos</span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-white/5 border border-white/10">
+                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Profiles / Devices</span>
+                    <span className="text-base font-extrabold text-white font-mono">{liveMetrics.number_of_profiles} / {liveMetrics.number_of_devices}</span>
+                  </div>
+                </div>
+
+                {/* Primary Action Buttons */}
+                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-white/10">
+                  <button
+                    onClick={handleScoreLive}
+                    disabled={isScoring}
+                    className="flex-1 min-w-[170px] px-3.5 py-2.5 rounded-lg bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-400 hover:to-indigo-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    <Sparkles className={`w-3.5 h-3.5 text-amber-300 ${isScoring ? 'animate-spin' : ''}`} />
+                    <span>{isScoring ? 'Inference Running...' : 'Score Churn Risk (Direct API)'}</span>
+                  </button>
+
+                  <button
+                    onClick={handleDownloadBatchCsv}
+                    className="flex-1 min-w-[170px] px-3.5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>{csvDownloaded ? 'Downloaded CSV!' : 'Download Batch CSV'}</span>
+                  </button>
+
+                  <a
+                    href="https://behaviour-pridection-intervention.vercel.app/#batch"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3 py-2.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-medium text-xs flex items-center gap-1.5 transition-colors"
+                    title="Open Churn CRM Batch CSV Scoring tab"
+                  >
+                    <span>Open CRM</span>
+                    <ExternalLink className="w-3 h-3 text-slate-300" />
+                  </a>
+                </div>
+              </div>
+
+              {/* Scoring Error Alert */}
+              {scoringError && (
+                <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold">Prediction Request Failed: </span>
+                    <span>{scoringError}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Live ML Prediction Output */}
+              {predictionResult && (
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+                    <span className="font-bold text-slate-900 text-xs">ML Inference Prediction Result:</span>
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                        predictionResult.risk_tier === 'Critical'
+                          ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                          : predictionResult.risk_tier === 'High'
+                          ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                          : predictionResult.risk_tier === 'Moderate'
+                          ? 'bg-sky-100 text-sky-800 border border-sky-300'
+                          : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                      }`}
+                    >
+                      {predictionResult.risk_tier} Risk
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-4">
+                    <div className="text-center p-3 rounded-xl bg-white border border-slate-200 min-w-[90px]">
+                      <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Probability</span>
+                      <span className="text-xl font-extrabold text-purple-700 font-mono">
+                        {predictionResult.churn_probability_pct}
+                      </span>
+                    </div>
+                    <div className="flex-1 space-y-1.5">
+                      <div className="flex justify-between text-[11px] font-semibold text-slate-700">
+                        <span>Predicted Churn Status</span>
+                        <span>{predictionResult.predicted_churn ? 'Likely to Cancel' : 'Likely Retained'}</span>
+                      </div>
+                      <div className="w-full h-2 rounded-full bg-slate-200 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-500 ${
+                            predictionResult.churn_probability > 0.6
+                              ? 'bg-rose-500'
+                              : predictionResult.churn_probability > 0.3
+                              ? 'bg-amber-500'
+                              : 'bg-emerald-500'
+                          }`}
+                          style={{ width: `${Math.round(predictionResult.churn_probability * 100)}%` }}
+                        />
+                      </div>
+                      <span className="text-[11px] text-slate-500 block">
+                        Evaluated via Logistic Regression model trained on OTT streaming engagement.
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* SHAP Risk Drivers */}
+                  {predictionResult.top_risk_drivers && predictionResult.top_risk_drivers.length > 0 && (
+                    <div className="pt-2 border-t border-slate-200 space-y-1">
+                      <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block">
+                        Top Contributing Risk Factors (SHAP):
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {predictionResult.top_risk_drivers.slice(0, 3).map((r, i) => (
+                          <span
+                            key={i}
+                            className="px-2 py-0.5 rounded bg-rose-50 border border-rose-200 text-rose-700 font-mono text-[10px]"
+                          >
+                            + {r.feature.replace(/_/g, ' ')}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Batch CSV Information Guide */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                <div className="flex items-center gap-2 text-slate-900 font-bold text-xs">
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                  <span>Batch CSV Scoring Instructions</span>
+                </div>
+                <p className="text-[11px] text-slate-600 leading-relaxed">
+                  The generated CSV file (<code className="text-emerald-800 font-mono font-bold bg-white px-1 py-0.5 rounded border border-slate-200">churn_subscribers_batch.csv</code>) contains 8 full subscriber records formatted with the exact 8 columns required by ChurnIQ:
+                </p>
+                <div className="p-2.5 rounded-lg bg-slate-900 text-emerald-300 font-mono text-[10px] overflow-x-auto">
+                  customer_id,tenure,plan,monthly_price,watch_hours_last_30_days,inactivity_days,support_tickets,payment_declines
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Click <strong>Download Batch CSV</strong> above or run <code className="bg-slate-200 px-1 rounded font-mono text-slate-800">npm run crm:csv</code> in your terminal, then drag the file into your dashboard at <a href="https://behaviour-pridection-intervention.vercel.app/" target="_blank" rel="noreferrer" className="text-purple-600 underline font-semibold">https://behaviour-pridection-intervention.vercel.app/</a>.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* TAB 1: Live Event Stream */}
           {activeTab === 'stream' && (

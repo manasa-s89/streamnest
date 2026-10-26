@@ -1,0 +1,9 @@
+customer_id,tenure,plan,monthly_price,watch_hours_last_30_days,inactivity_days,support_tickets,payment_declines
+CUST-84920,8,Standard,14.99,18.5,10,0,0
+CUST-39184,9,Premium,20.99,55.0,2,0,0
+CUST-55209,6,Basic,8.99,2.5,28,3,1
+CUST-77102,2,Basic,8.99,0.8,42,4,2
+CUST-92811,7,Standard,14.99,22.4,5,1,0
+CUST-10482,14,Premium,20.99,42.0,3,0,0
+CUST-63914,3,Basic,8.99,1.2,35,2,1
+CUST-48201,11,Standard,14.99,31.5,1,0,0
