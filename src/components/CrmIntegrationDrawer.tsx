@@ -123,7 +123,19 @@ export const CrmIntegrationDrawer: React.FC<CrmIntegrationDrawerProps> = ({
       const res = await predictChurnDirect(liveMetrics, crmUrl);
       setPredictionResult(res);
     } catch (err: any) {
-      setScoringError(err.message || 'Failed to score churn prediction');
+      let message = 'Failed to score churn prediction';
+      if (typeof err === 'string') {
+        message = err;
+      } else if (err?.message && typeof err.message === 'string' && err.message !== '[object Object]') {
+        message = err.message;
+      } else if (typeof err?.error === 'string') {
+        message = err.error;
+      } else if (typeof err?.error?.message === 'string') {
+        message = err.error.message;
+      } else if (err?.message && typeof err.message === 'object') {
+        message = err.message.message || JSON.stringify(err.message);
+      }
+      setScoringError(message);
     } finally {
       setIsScoring(false);
     }

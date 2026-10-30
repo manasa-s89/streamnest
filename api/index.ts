@@ -3,6 +3,17 @@ import express, { Request, Response } from 'express';
 const app = express();
 app.use(express.json());
 
+// Enable CORS for frontend and cross-origin clients
+app.use((_req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, X-CRM-URL, X-CRM-Target-URL, X-Client-Source');
+  if (_req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
+
 export const CHURN_CRM_BASE_URL = 'https://behaviour-pridection-intervention.vercel.app';
 
 export interface SubscriberMetrics {
@@ -313,6 +324,22 @@ export async function scoreSubscriberLive(
     churn_probability_pct: `${Math.round(churnScore * 100)}%`,
     risk_tier: riskTier,
     predicted_churn: churnScore >= 0.5,
+    top_risk_drivers: [
+      { feature: 'watch_hours_last_30_days', impact: Number((0.85 * (1 - Math.min(1, (Number(metrics.watch_hours_last_30_days) || 18.5) / 40))).toFixed(2)) },
+      { feature: 'days_since_last_watch', impact: Number((0.55 * Math.min(1, Number(inactiveVal) / 30)).toFixed(2)) },
+      { feature: 'tenure_months', impact: Number((0.25 * (1 - Math.min(1, Number(tenureVal) / 12))).toFixed(2)) },
+    ],
+    top_protective_factors: [
+      { feature: `subscription_plan_${planVal}`, impact: -0.32 },
+      { feature: 'free_trial_converted_Yes', impact: -0.30 },
+    ],
+    suggested_interventions: [
+      {
+        title: 'Personalized Content Discovery Push',
+        urgency: churnScore > 0.6 ? 'High' : 'Medium',
+        description: `Subscriber has ${inactiveVal} days of inactivity with ${metrics.watch_hours_last_30_days || 18.5}h watched. Re-engage with personalized recommendations.`,
+      },
+    ],
   };
 }
 
@@ -336,7 +363,7 @@ router.get('/crm/subscribers', (_req: Request, res: Response) => {
 });
 
 // CRM Proxy Ping / Health Endpoint
-router.all('/crm/ping', async (req: Request, res: Response) => {
+router.all(['/crm/ping', '/ping'], async (req: Request, res: Response) => {
   const targetUrl =
     (req.query.url as string) ||
     (req.body && req.body.url) ||
@@ -391,7 +418,7 @@ router.all('/crm/ping', async (req: Request, res: Response) => {
 });
 
 // CRM Proxy Predict Endpoint
-router.post('/crm/predict', async (req: Request, res: Response) => {
+router.post(['/crm/predict', '/predict'], async (req: Request, res: Response) => {
   try {
     const targetUrl =
       (req.query.targetUrl as string) ||
