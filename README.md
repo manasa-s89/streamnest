@@ -15,7 +15,7 @@ StreamNest is a modern, premium OTT streaming platform built with React, Vite, E
 
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, Motion, Lucide React
 - **Backend**: Express, WebSocket (`ws`), tsx, Node.js
-- **AI & Integrations**: Google Gen AI SDK
+- **CRM & ML Bridge**: ChurnIQ ML Telemetry Pipeline & Engagement Analytics
 
 ## 🚀 Getting Started
 
